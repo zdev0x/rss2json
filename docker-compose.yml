@@ -1,0 +1,11 @@
+version: "3.9"
+
+services:
+  app:
+    image: ghcr.io/zdev0x/rss2json:latest
+    container_name: rss2json
+    # 如需本地构建，可改为使用 build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080

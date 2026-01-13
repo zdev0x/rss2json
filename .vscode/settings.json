@@ -1,0 +1,18 @@
+{
+  "editor.formatOnSave": true,
+  "[go]": {
+    "editor.defaultFormatter": "golang.go",
+    "editor.formatOnSave": true
+  },
+  "go.testTimeout": "60s",
+  "go.testFlags": [
+    "-count=1"
+  ],
+  "gopls": {
+    "ui.semanticTokens": true,
+    "analyses": {
+      "unusedparams": true,
+      "unusedwrite": true
+    }
+  }
+}
