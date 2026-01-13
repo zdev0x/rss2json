@@ -41,9 +41,14 @@ docker compose down
 
 ## 配置
 
-- `LISTEN_ADDR`：完整监听地址（优先级最高），示例 `0.0.0.0:8080`
-- `PORT`：仅端口号，自动监听为 `0.0.0.0:<PORT>`，默认 `8080`
-- `REQUEST_LOG`：开启请求日志，取值 `1/true/on` 时生效，默认关闭
+| 环境变量      | 作用 | 示例 | 说明 |
+| --- | --- | --- | --- |
+| `API_KEY` | 鉴权开关 | `mykey` | 设置后请求需携带 `Authorization: Bearer <API_KEY>`，未携带返回 401 |
+| `LISTEN_ADDR` | 监听地址 | `0.0.0.0:8080` | 优先级最高，完整地址 |
+| `PORT` | 监听端口 | `8080` | 仅端口号，自动变为 `0.0.0.0:<PORT>`，默认 `8080` |
+| `REQUEST_LOG` | 访问日志 | `on` | `1/true/on` 开启，默认关闭，日志含方法/URL/状态/IP/耗时 |
+| `RSS_HEADERS` | 自定义请求头 | `X-Test=ok,User-Agent=custom` | 应用于拉取 RSS 的出站请求，可覆盖默认 UA |
+| `RSS_PROXY` | 代理设置 | `http://127.0.0.1:8888` / `socks5://127.0.0.1:1080` | 支持 http/https/socks5，用于访问 RSS |
 
 ## API
 

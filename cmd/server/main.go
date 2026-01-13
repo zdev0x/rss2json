@@ -18,9 +18,14 @@ func main() {
 
 	addr := resolveListenAddr()
 	printBanner(addr)
+
 	var handler http.Handler = mux
 	if shouldLogRequest() {
 		handler = withRequestLog(mux)
+	}
+
+	if key := strings.TrimSpace(os.Getenv("API_KEY")); key != "" {
+		handler = withAPIKeyAuth(handler, key)
 	}
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
@@ -44,12 +49,31 @@ func resolveListenAddr() string {
 	return "0.0.0.0:8080"
 }
 
+// withAPIKeyAuth 启用基于 Authorization: Bearer <API_KEY> 的简单鉴权。
+func withAPIKeyAuth(next http.Handler, key string) http.Handler {
+	token := strings.TrimSpace(key)
+	expected := "bearer " + strings.ToLower(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.ToLower(strings.TrimSpace(r.Header.Get("Authorization")))
+		if auth != expected {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"status":"error","message":"unauthorized"}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // printBanner 输出启动信息，突出 rss2json。
 func printBanner(addr string) {
 	border := strings.Repeat("#", 56)
 	logStatus := "off"
 	if shouldLogRequest() {
 		logStatus = "on"
+	}
+	authStatus := "off"
+	if strings.TrimSpace(os.Getenv("API_KEY")) != "" {
+		authStatus = "on"
 	}
 	hostForURL := addr
 	if strings.HasPrefix(hostForURL, ":") {
@@ -64,7 +88,7 @@ func printBanner(addr string) {
 		"  |_| \\_\\_|   |____/|_____|\\___/ \\___(_)_| \\_|",
 	}
 
-	log.Printf("\n%s\n%s\n  Listen: %s\n  API:    %s/api/v1/rss2json?url=<rss_url>\n  Log:    %s (REQUEST_LOG)\n%s", border, strings.Join(logo, "\n"), addr, httpBase, logStatus, border)
+	log.Printf("\n%s\n%s\n  Listen: %s\n  API:    %s/api/v1/rss2json?url=<rss_url>\n  Log:    %s (REQUEST_LOG)\n  Auth:   %s (API_KEY)\n%s", border, strings.Join(logo, "\n"), addr, httpBase, logStatus, authStatus, border)
 }
 
 // shouldLogRequest 通过环境变量控制请求日志开关，默认关闭。

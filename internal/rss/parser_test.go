@@ -57,6 +57,63 @@ func TestConvertBadXML(t *testing.T) {
 	}
 }
 
+func TestNewHTTPClientFromEnvHTTPProxy(t *testing.T) {
+	t.Setenv("RSS_PROXY", "http://127.0.0.1:8888")
+	c := newHTTPClientFromEnv()
+	client, ok := c.(*http.Client)
+	if !ok {
+		t.Fatalf("expected *http.Client")
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok || tr.Proxy == nil {
+		t.Fatalf("expected http transport with proxy")
+	}
+}
+
+func TestNewHTTPClientFromEnvSocks5(t *testing.T) {
+	t.Setenv("RSS_PROXY", "socks5://127.0.0.1:1080")
+	c := newHTTPClientFromEnv()
+	client, ok := c.(*http.Client)
+	if !ok {
+		t.Fatalf("expected *http.Client")
+	}
+	tr, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected http transport")
+	}
+	if tr.DialContext == nil {
+		t.Fatalf("expected DialContext to be set for socks5")
+	}
+}
+
+func TestCustomHeadersFromEnv(t *testing.T) {
+	t.Setenv("RSS_HEADERS", "X-Test=ok,User-Agent=custom-agent")
+	restore := WithHTTPClient(headerDoer{t: t})
+	defer restore()
+
+	if _, err := Convert(context.Background(), "https://example.com/rss"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+type headerDoer struct {
+	t *testing.T
+}
+
+func (h headerDoer) Do(req *http.Request) (*http.Response, error) {
+	h.t.Helper()
+	if got := req.Header.Get("X-Test"); got != "ok" {
+		h.t.Fatalf("header X-Test not set, got %q", got)
+	}
+	if ua := req.Header.Get("User-Agent"); ua != "custom-agent" {
+		h.t.Fatalf("user-agent not overridden, got %q", ua)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewBufferString(sampleRSS)),
+	}, nil
+}
+
 const sampleRSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/">
   <channel>
