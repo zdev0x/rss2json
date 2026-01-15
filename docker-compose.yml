@@ -9,3 +9,7 @@ services:
       - "8080:8080"
     environment:
       - PORT=8080
+      - REQUEST_LOG=on          # 开启请求日志（1/true/on）
+      - API_KEY=changeme        # 设置后需要 Authorization: Bearer <API_KEY>
+      - RSS_PROXY=              # 可选 http/https/socks5 代理，如 http://127.0.0.1:8888
+      - RSS_HEADERS=X-Test=ok   # 可选自定义头，逗号分隔，例如 X-Test=ok,User-Agent=custom

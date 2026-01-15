@@ -2,10 +2,8 @@ package rss
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net"
 	"net/http"
@@ -15,11 +13,56 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mmcdole/gofeed"
 	"github.com/zdev0x/rss2json/internal/model"
 )
 
 // httpClientTimeout 定义 RSS 拉取超时时间。
-const httpClientTimeout = 10 * time.Second
+const (
+	httpClientTimeout   = 10 * time.Second
+	dialTimeout         = 5 * time.Second
+	tlsHandshakeTimeout = 5 * time.Second
+	responseHeaderTime  = 5 * time.Second
+	idleConnTimeout     = 30 * time.Second
+	maxIdleConns        = 100
+	maxIdleConnsPerHost = 10
+	defaultMaxFeedBytes = int64(10 << 20) // 10 MiB
+)
+
+const maxFeedBytesEnv = "RSS_MAX_BYTES"
+
+type ErrorKind int
+
+const (
+	ErrorKindInvalidInput ErrorKind = iota + 1
+	ErrorKindUpstream
+)
+
+type FeedError struct {
+	Kind ErrorKind
+	Err  error
+}
+
+func (e *FeedError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *FeedError) Unwrap() error {
+	return e.Err
+}
+
+func newInvalidInputErr(err error) error {
+	return &FeedError{Kind: ErrorKindInvalidInput, Err: err}
+}
+
+func newUpstreamErr(err error) error {
+	return &FeedError{Kind: ErrorKindUpstream, Err: err}
+}
+
+func IsInvalidInput(err error) bool {
+	var feedErr *FeedError
+	return errors.As(err, &feedErr) && feedErr.Kind == ErrorKindInvalidInput
+}
 
 type httpDoer interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -37,85 +80,76 @@ func WithHTTPClient(d httpDoer) func() {
 	}
 }
 
-// fetchAndDecode 从给定 URL 拉取 RSS 并解析为内部结构。
-func fetchAndDecode(ctx context.Context, url string) (*rssRoot, error) {
+// fetchAndParse 从给定 URL 拉取 Feed 并解析为 gofeed 结构。
+func fetchAndParse(ctx context.Context, url string) (*gofeed.Feed, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建请求失败: %w", err)
+		return nil, newInvalidInputErr(fmt.Errorf("创建请求失败: %w", err))
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
 	applyCustomHeaders(req)
 
 	resp, err := defaultHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("下载 RSS 失败: %w", err)
+		return nil, newUpstreamErr(fmt.Errorf("下载 RSS 失败: %w", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("RSS 返回非 2xx 状态码: %d", resp.StatusCode)
+		return nil, newUpstreamErr(fmt.Errorf("RSS 返回非 2xx 状态码: %d", resp.StatusCode))
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	reader := io.Reader(resp.Body)
+	var limited *io.LimitedReader
+	maxBytes := maxFeedBytes()
+	if maxBytes > 0 {
+		limited = &io.LimitedReader{R: resp.Body, N: maxBytes + 1}
+		reader = limited
+	}
+
+	parser := gofeed.NewParser()
+	feed, err := parser.Parse(reader)
 	if err != nil {
-		return nil, fmt.Errorf("读取 RSS 内容失败: %w", err)
+		if limited != nil && limited.N == 0 {
+			return nil, newUpstreamErr(fmt.Errorf("RSS 内容超过限制: %d bytes", maxBytes))
+		}
+		return nil, newUpstreamErr(fmt.Errorf("解析 RSS 失败: %w", err))
 	}
-
-	var root rssRoot
-	if err := xml.Unmarshal(body, &root); err != nil {
-		return nil, fmt.Errorf("解析 RSS 失败: %w", err)
+	if limited != nil && limited.N == 0 {
+		return nil, newUpstreamErr(fmt.Errorf("RSS 内容超过限制: %d bytes", maxBytes))
 	}
-	return &root, nil
+	return feed, nil
 }
 
 // Convert 将给定 URL 的 RSS 转为统一 JSON 模型。
 func Convert(ctx context.Context, url string) (model.Response, error) {
 	if url == "" {
-		return model.Response{}, errors.New("缺少 rss url")
+		return model.Response{}, newInvalidInputErr(errors.New("缺少 rss url"))
 	}
 
-	root, err := fetchAndDecode(ctx, url)
+	feed, err := fetchAndParse(ctx, url)
 	if err != nil {
 		return model.Response{}, err
 	}
 
-	channel := root.Channel
-	feed := model.Feed{
-		URL:         url,
-		Title:       channel.Title,
-		Link:        channel.Link,
-		Author:      channel.ManagingEditor,
-		Description: html.UnescapeString(channel.Description),
-		Image:       channel.Image.URL,
-	}
-
-	items := make([]model.Item, 0, len(channel.Items))
-	for _, it := range channel.Items {
-		items = append(items, model.Item{
-			Title:       it.Title,
-			Link:        it.Link,
-			Author:      firstNonEmpty(it.Author, it.Creator),
-			Description: html.UnescapeString(it.Description),
-			Content:     html.UnescapeString(it.Content),
-			PubDate:     it.PubDate,
-			Guid:        it.GUID.Value,
-		})
-	}
-
 	return model.Response{
-		Status: "ok",
-		Feed:   feed,
-		Items:  items,
+		Status:  "ok",
+		Version: model.APIVersion,
+		Feed:    model.NewFeedMeta(feed),
+		Items:   feed.Items,
 	}, nil
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
+func maxFeedBytes() int64 {
+	raw := strings.TrimSpace(os.Getenv(maxFeedBytesEnv))
+	if raw == "" {
+		return defaultMaxFeedBytes
 	}
-	return ""
+	val, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || val <= 0 {
+		return defaultMaxFeedBytes
+	}
+	return val
 }
 
 // newHTTPClientFromEnv 构造支持代理的 http.Client。
@@ -124,6 +158,16 @@ func newHTTPClientFromEnv() httpDoer {
 
 	tr := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout:   tlsHandshakeTimeout,
+		ResponseHeaderTimeout: responseHeaderTime,
+		IdleConnTimeout:       idleConnTimeout,
+		MaxIdleConns:          maxIdleConns,
+		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+		ExpectContinueTimeout: time.Second,
 	}
 
 	if proxyEnv == "" {
@@ -191,7 +235,10 @@ func customHeadersFromEnv() map[string]string {
 
 // dialSocks5 建立 SOCKS5 连接，仅支持无认证模式。
 func dialSocks5(ctx context.Context, proxyAddr string, targetAddr string) (net.Conn, error) {
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{
+		Timeout:   dialTimeout,
+		KeepAlive: 30 * time.Second,
+	}
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("连接 SOCKS5 代理失败: %w", err)
@@ -285,38 +332,4 @@ func dialSocks5(ctx context.Context, proxyAddr string, targetAddr string) (net.C
 	}
 
 	return conn, nil
-}
-
-// 以下为 XML 映射结构，尽量覆盖常见 RSS 字段。
-
-type rssRoot struct {
-	Channel rssChannel `xml:"channel"`
-}
-
-type rssChannel struct {
-	Title          string    `xml:"title"`
-	Link           string    `xml:"link"`
-	Description    string    `xml:"description"`
-	ManagingEditor string    `xml:"managingEditor"`
-	Image          rssImage  `xml:"image"`
-	Items          []rssItem `xml:"item"`
-}
-
-type rssImage struct {
-	URL string `xml:"url"`
-}
-
-type rssGuid struct {
-	Value string `xml:",chardata"`
-}
-
-type rssItem struct {
-	Title       string  `xml:"title"`
-	Link        string  `xml:"link"`
-	Description string  `xml:"description"`
-	Author      string  `xml:"author"`
-	Creator     string  `xml:"http://purl.org/dc/elements/1.1/ creator"`
-	Content     string  `xml:"http://purl.org/rss/1.0/modules/content/ encoded"`
-	PubDate     string  `xml:"pubDate"`
-	GUID        rssGuid `xml:"guid"`
 }

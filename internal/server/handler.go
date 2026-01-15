@@ -1,7 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -19,14 +22,34 @@ func ConvertHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := rss.Convert(r.Context(), rssURL)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, model.Response{
+		status, message := mapError(err)
+		writeJSON(w, status, model.Response{
 			Status:  "error",
-			Message: "Cannot download this RSS feed, make sure the Rss URL is correct.",
+			Version: model.APIVersion,
+			Message: message,
 		})
 		return
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func mapError(err error) (int, string) {
+	if rss.IsInvalidInput(err) {
+		return http.StatusBadRequest, "Missing rss url."
+	}
+	if isTimeout(err) {
+		return http.StatusGatewayTimeout, "RSS fetch timeout."
+	}
+	return http.StatusBadGateway, "Cannot download this RSS feed, make sure the Rss URL is correct."
+}
+
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {

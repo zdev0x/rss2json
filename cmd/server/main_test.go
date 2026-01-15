@@ -4,18 +4,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/zdev0x/rss2json/internal/server"
 )
 
 func TestWithAPIKeyAuthSuccess(t *testing.T) {
-	protected := withAPIKeyAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}), "secret")
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler := server.NewHandler(server.Options{APIKey: "secret"})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	rr := httptest.NewRecorder()
 
-	protected.ServeHTTP(rr, req)
+	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
@@ -23,14 +22,11 @@ func TestWithAPIKeyAuthSuccess(t *testing.T) {
 }
 
 func TestWithAPIKeyAuthFail(t *testing.T) {
-	protected := withAPIKeyAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}), "secret")
-
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	handler := server.NewHandler(server.Options{APIKey: "secret"})
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rr := httptest.NewRecorder()
 
-	protected.ServeHTTP(rr, req)
+	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", rr.Code)

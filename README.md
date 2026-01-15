@@ -49,6 +49,7 @@ docker compose down
 | `REQUEST_LOG` | 访问日志 | `on` | `1/true/on` 开启，默认关闭，日志含方法/URL/状态/IP/耗时 |
 | `RSS_HEADERS` | 自定义请求头 | `X-Test=ok,User-Agent=custom` | 应用于拉取 RSS 的出站请求，可覆盖默认 UA |
 | `RSS_PROXY` | 代理设置 | `http://127.0.0.1:8888` / `socks5://127.0.0.1:1080` | 支持 http/https/socks5，用于访问 RSS |
+| `RSS_MAX_BYTES` | RSS 最大内容大小 | `10485760` | 超过限制返回错误，默认 10 MiB |
 
 ## API
 
@@ -58,13 +59,16 @@ docker compose down
 ```json
 {
   "status": "ok",
+  "version": "v1",
   "feed": {
     "url": "https://www.theguardian.com/international/rss",
     "title": "title",
     "link": "https://www.theguardian.com/international",
     "author": "",
     "description": "Latest international news, sport and comment from the Guardian",
-    "image": "https://assets.guim.co.uk/images/guardian-logo-rss.c45beb1bafa34b347ac333af2e6fe23f.png"
+    "image": {
+      "url": "https://assets.guim.co.uk/images/guardian-logo-rss.c45beb1bafa34b347ac333af2e6fe23f.png"
+    }
   },
   "items": [
     {
@@ -79,7 +83,18 @@ docker compose down
 ```json
 {
   "status": "error",
+  "version": "v1",
   "message": "Cannot download this RSS feed, make sure the Rss URL is correct."
+}
+```
+
+- 参数错误示例：
+
+```json
+{
+  "status": "error",
+  "version": "v1",
+  "message": "Missing rss url."
 }
 ```
 

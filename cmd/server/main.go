@@ -2,33 +2,22 @@ package main
 
 import (
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/zdev0x/rss2json/internal/server"
 )
 
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/rss2json", server.ConvertHandler)
-	mux.HandleFunc("/health", server.HealthHandler)
-
 	addr := resolveListenAddr()
-	printBanner(addr)
-
-	var handler http.Handler = mux
-	if shouldLogRequest() {
-		handler = withRequestLog(mux)
+	opts := server.Options{
+		APIKey:           strings.TrimSpace(os.Getenv("API_KEY")),
+		EnableRequestLog: shouldLogRequest(),
 	}
+	printBanner(addr, opts)
 
-	if key := strings.TrimSpace(os.Getenv("API_KEY")); key != "" {
-		handler = withAPIKeyAuth(handler, key)
-	}
-
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	if err := http.ListenAndServe(addr, server.NewHandler(opts)); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -49,30 +38,15 @@ func resolveListenAddr() string {
 	return "0.0.0.0:8080"
 }
 
-// withAPIKeyAuth 启用基于 Authorization: Bearer <API_KEY> 的简单鉴权。
-func withAPIKeyAuth(next http.Handler, key string) http.Handler {
-	token := strings.TrimSpace(key)
-	expected := "bearer " + strings.ToLower(token)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := strings.ToLower(strings.TrimSpace(r.Header.Get("Authorization")))
-		if auth != expected {
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"status":"error","message":"unauthorized"}`))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // printBanner 输出启动信息，突出 rss2json。
-func printBanner(addr string) {
+func printBanner(addr string, opts server.Options) {
 	border := strings.Repeat("#", 56)
 	logStatus := "off"
-	if shouldLogRequest() {
+	if opts.EnableRequestLog {
 		logStatus = "on"
 	}
 	authStatus := "off"
-	if strings.TrimSpace(os.Getenv("API_KEY")) != "" {
+	if strings.TrimSpace(opts.APIKey) != "" {
 		authStatus = "on"
 	}
 	hostForURL := addr
@@ -95,38 +69,4 @@ func printBanner(addr string) {
 func shouldLogRequest() bool {
 	val := strings.ToLower(strings.TrimSpace(os.Getenv("REQUEST_LOG")))
 	return val == "1" || val == "true" || val == "on"
-}
-
-// withRequestLog 为 handler 增加最小访问日志，记录方法、路径、状态码与耗时。
-func withRequestLog(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rec, r)
-		log.Printf("[request] %s %s %d %s ip=%s", r.Method, r.URL.RequestURI(), rec.status, time.Since(start), clientIP(r))
-	})
-}
-
-// statusRecorder 记录响应状态码。
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (s *statusRecorder) WriteHeader(statusCode int) {
-	s.status = statusCode
-	s.ResponseWriter.WriteHeader(statusCode)
-}
-
-// clientIP 提取请求端 IP，优先使用 X-Forwarded-For。
-func clientIP(r *http.Request) string {
-	xff := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-For"), ",")[0])
-	if xff != "" {
-		return xff
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil && host != "" {
-		return host
-	}
-	return r.RemoteAddr
 }

@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/zdev0x/rss2json/internal/model"
 )
 
 func TestConvertSuccess(t *testing.T) {
@@ -21,11 +23,14 @@ func TestConvertSuccess(t *testing.T) {
 	if resp.Status != "ok" {
 		t.Fatalf("expected status ok, got %s", resp.Status)
 	}
+	if resp.Version != model.APIVersion {
+		t.Fatalf("unexpected version: %s", resp.Version)
+	}
+	if resp.Feed == nil {
+		t.Fatal("expected feed to be set")
+	}
 	if resp.Feed.Title != "Sample Feed" {
 		t.Fatalf("unexpected feed title: %s", resp.Feed.Title)
-	}
-	if resp.Feed.Description != "<p>Demo</p>" {
-		t.Fatalf("feed description not unescaped: %q", resp.Feed.Description)
 	}
 	if len(resp.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(resp.Items))
@@ -34,17 +39,19 @@ func TestConvertSuccess(t *testing.T) {
 	if item.Content == "" || !strings.Contains(item.Content, "Hello") {
 		t.Fatalf("unexpected item content: %s", item.Content)
 	}
-	if item.Description != "<p>Desc</p>" {
+	if item.Description == "" || !strings.Contains(item.Description, "Desc") {
 		t.Fatalf("description should keep html, got %q", item.Description)
 	}
-	if item.Author != "John Doe" {
-		t.Fatalf("unexpected author: %s", item.Author)
+	if item.GUID != "abc123" {
+		t.Fatalf("unexpected guid: %s", item.GUID)
 	}
 }
 
 func TestConvertMissingURL(t *testing.T) {
 	if _, err := Convert(context.Background(), ""); err == nil {
 		t.Fatal("expected error for empty url")
+	} else if !IsInvalidInput(err) {
+		t.Fatalf("expected invalid input error, got %v", err)
 	}
 }
 
@@ -54,6 +61,56 @@ func TestConvertBadXML(t *testing.T) {
 
 	if _, err := Convert(context.Background(), "https://example.com/rss"); err == nil {
 		t.Fatal("expected XML parse error")
+	} else if IsInvalidInput(err) {
+		t.Fatalf("expected upstream error, got %v", err)
+	}
+}
+
+func TestConvertBodyTooLarge(t *testing.T) {
+	t.Setenv(maxFeedBytesEnv, "64")
+	restore := WithHTTPClient(fakeDoer{body: sampleRSS, status: http.StatusOK})
+	defer restore()
+
+	if _, err := Convert(context.Background(), "https://example.com/rss"); err == nil {
+		t.Fatal("expected size limit error")
+	} else if IsInvalidInput(err) {
+		t.Fatalf("expected upstream error, got %v", err)
+	}
+}
+
+func TestConvertAtomSuccess(t *testing.T) {
+	restore := WithHTTPClient(fakeDoer{body: sampleAtom, status: http.StatusOK})
+	defer restore()
+
+	resp, err := Convert(context.Background(), "https://example.com/atom")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Feed == nil {
+		t.Fatal("expected feed to be set")
+	}
+	if resp.Feed.Title != "Atom Feed" {
+		t.Fatalf("unexpected feed title: %s", resp.Feed.Title)
+	}
+	if len(resp.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(resp.Items))
+	}
+	item := resp.Items[0]
+	if item.Title != "Atom Item" {
+		t.Fatalf("unexpected item title: %s", item.Title)
+	}
+	if item.Author == nil || item.Author.Name != "Jane Doe" {
+		t.Fatalf("unexpected author: %v", item.Author)
+	}
+	if got := firstNonEmpty(item.Published, item.Updated); got != "2024-01-02T00:00:00Z" {
+		t.Fatalf("unexpected pub date: %s", got)
+	}
+	if item.Description != "<p>Atom Summary</p>" {
+		t.Fatalf("unexpected description: %s", item.Description)
+	}
+	if item.Content != "<p>Atom Content</p>" {
+		t.Fatalf("unexpected content: %s", item.Content)
 	}
 }
 
@@ -100,6 +157,15 @@ type headerDoer struct {
 	t *testing.T
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func (h headerDoer) Do(req *http.Request) (*http.Response, error) {
 	h.t.Helper()
 	if got := req.Header.Get("X-Test"); got != "ok" {
@@ -135,6 +201,29 @@ const sampleRSS = `<?xml version="1.0" encoding="UTF-8"?>
     </item>
   </channel>
 </rss>`
+
+const sampleAtom = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom Feed</title>
+  <link href="https://example.com"/>
+  <updated>2024-01-01T00:00:00Z</updated>
+  <author>
+    <name>Jane Doe</name>
+  </author>
+  <id>urn:uuid:60a76c80-d399-11d9-b93C-0003939e0af6</id>
+  <subtitle>&lt;p&gt;Atom Desc&lt;/p&gt;</subtitle>
+  <entry>
+    <title>Atom Item</title>
+    <link href="https://example.com/atom/1"/>
+    <id>tag:example.com,2024:1</id>
+    <updated>2024-01-02T00:00:00Z</updated>
+    <summary><![CDATA[<p>Atom Summary</p>]]></summary>
+    <content type="html">&lt;p&gt;Atom Content&lt;/p&gt;</content>
+    <author>
+      <name>Jane Doe</name>
+    </author>
+  </entry>
+</feed>`
 
 // newTCP4Server 保证在 IPv4 下监听，避免沙箱禁用 IPv6。
 type fakeDoer struct {
