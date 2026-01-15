@@ -36,12 +36,21 @@ func ConvertHandler(w http.ResponseWriter, r *http.Request) {
 
 func mapError(err error) (int, string) {
 	if rss.IsInvalidInput(err) {
-		return http.StatusBadRequest, "Missing rss url."
+		// 情况 1: 输入参数缺失（422 是非常好的选择）
+		return http.StatusUnprocessableEntity, "Missing rss url."
 	}
+
 	if isTimeout(err) {
-		return http.StatusGatewayTimeout, "RSS fetch timeout."
+		// 情况 2: 抓取超时
+		// 建议：改用 408 (Request Timeout) 或直接用 400
+		// 这样 Cloudflare 会认为这是业务超时，而不是你的服务器宕机
+		return http.StatusRequestTimeout, "RSS fetch timeout. The target server responded too slowly."
 	}
-	return http.StatusBadGateway, "Cannot download this RSS feed, make sure the Rss URL is correct."
+
+	// 情况 3: 无法下载、DNS 解析失败、404 等
+	// 原代码返回 StatusBadGateway (502)，这是导致 Cloudflare 报错的罪魁祸首
+	// 建议：改用 400 Bad Request 或 422
+	return http.StatusBadRequest, "Cannot download this RSS feed. Please check if the URL is valid and accessible."
 }
 
 func isTimeout(err error) bool {
