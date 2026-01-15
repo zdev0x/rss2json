@@ -1,7 +1,9 @@
 package rss
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -81,22 +83,22 @@ func WithHTTPClient(d httpDoer) func() {
 }
 
 // fetchAndParse 从给定 URL 拉取 Feed 并解析为 gofeed 结构。
-func fetchAndParse(ctx context.Context, url string) (*gofeed.Feed, error) {
+func fetchAndParse(ctx context.Context, url string) (*gofeed.Feed, []string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, newInvalidInputErr(fmt.Errorf("创建请求失败: %w", err))
+		return nil, nil, newInvalidInputErr(fmt.Errorf("创建请求失败: %w", err))
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36")
 	applyCustomHeaders(req)
 
 	resp, err := defaultHTTPClient.Do(req)
 	if err != nil {
-		return nil, newUpstreamErr(fmt.Errorf("下载 RSS 失败: %w", err))
+		return nil, nil, newUpstreamErr(fmt.Errorf("下载 RSS 失败: %w", err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, newUpstreamErr(fmt.Errorf("RSS 返回非 2xx 状态码: %d", resp.StatusCode))
+		return nil, nil, newUpstreamErr(fmt.Errorf("RSS 返回非 2xx 状态码: %d", resp.StatusCode))
 	}
 
 	reader := io.Reader(resp.Body)
@@ -107,18 +109,22 @@ func fetchAndParse(ctx context.Context, url string) (*gofeed.Feed, error) {
 		reader = limited
 	}
 
+	var buf bytes.Buffer
+	tee := io.TeeReader(reader, &buf)
+
 	parser := gofeed.NewParser()
-	feed, err := parser.Parse(reader)
+	feed, err := parser.Parse(tee)
 	if err != nil {
 		if limited != nil && limited.N == 0 {
-			return nil, newUpstreamErr(fmt.Errorf("RSS 内容超过限制: %d bytes", maxBytes))
+			return nil, nil, newUpstreamErr(fmt.Errorf("RSS 内容超过限制: %d bytes", maxBytes))
 		}
-		return nil, newUpstreamErr(fmt.Errorf("解析 RSS 失败: %w", err))
+		return nil, nil, newUpstreamErr(fmt.Errorf("解析 RSS 失败: %w", err))
 	}
 	if limited != nil && limited.N == 0 {
-		return nil, newUpstreamErr(fmt.Errorf("RSS 内容超过限制: %d bytes", maxBytes))
+		return nil, nil, newUpstreamErr(fmt.Errorf("RSS 内容超过限制: %d bytes", maxBytes))
 	}
-	return feed, nil
+	thumbnails := extractItemThumbnails(buf.Bytes())
+	return feed, thumbnails, nil
 }
 
 // Convert 将给定 URL 的 RSS 转为统一 JSON 模型。
@@ -127,17 +133,103 @@ func Convert(ctx context.Context, url string) (model.Response, error) {
 		return model.Response{}, newInvalidInputErr(errors.New("缺少 rss url"))
 	}
 
-	feed, err := fetchAndParse(ctx, url)
+	feed, thumbnails, err := fetchAndParse(ctx, url)
 	if err != nil {
 		return model.Response{}, err
+	}
+	stripExtensions(feed)
+
+	items := make([]*model.ItemMeta, 0, len(feed.Items))
+	for i, item := range feed.Items {
+		thumbnail := ""
+		if i < len(thumbnails) {
+			thumbnail = thumbnails[i]
+		}
+		items = append(items, model.NewItemMeta(item, thumbnail))
 	}
 
 	return model.Response{
 		Status:  "ok",
 		Version: model.APIVersion,
 		Feed:    model.NewFeedMeta(feed),
-		Items:   feed.Items,
+		Items:   items,
 	}, nil
+}
+
+// stripExtensions 移除 Feed 与 Item 的扩展字段，避免对外展示。
+func stripExtensions(feed *gofeed.Feed) {
+	if feed == nil {
+		return
+	}
+	feed.Extensions = nil
+	for _, item := range feed.Items {
+		if item == nil {
+			continue
+		}
+		item.Extensions = nil
+	}
+}
+
+func extractItemThumbnails(body []byte) []string {
+	if len(body) == 0 {
+		return nil
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	thumbnails := make([]string, 0)
+	inItem := false
+	current := ""
+	for {
+		tok, err := decoder.Token()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return thumbnails
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			name := strings.ToLower(t.Name.Local)
+			if name == "item" || name == "entry" {
+				inItem = true
+				current = ""
+				continue
+			}
+			if !inItem || name != "thumbnail" {
+				continue
+			}
+			if current != "" {
+				_ = decoder.Skip()
+				continue
+			}
+			if url := attrURL(t.Attr); url != "" {
+				current = url
+				_ = decoder.Skip()
+				continue
+			}
+			var value string
+			if err := decoder.DecodeElement(&value, &t); err == nil {
+				current = strings.TrimSpace(value)
+			}
+		case xml.EndElement:
+			name := strings.ToLower(t.Name.Local)
+			if name == "item" || name == "entry" {
+				if inItem {
+					thumbnails = append(thumbnails, strings.TrimSpace(current))
+				}
+				inItem = false
+			}
+		}
+	}
+	return thumbnails
+}
+
+func attrURL(attrs []xml.Attr) string {
+	for _, attr := range attrs {
+		if strings.EqualFold(attr.Name.Local, "url") {
+			return strings.TrimSpace(attr.Value)
+		}
+	}
+	return ""
 }
 
 func maxFeedBytes() int64 {

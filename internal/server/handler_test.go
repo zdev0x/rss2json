@@ -17,7 +17,7 @@ import (
 func TestConvertHandlerOK(t *testing.T) {
 	restore := rss.WithHTTPClient(fakeDoer{
 		status: http.StatusOK,
-		body:   `<?xml version="1.0" encoding="UTF-8"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>a</title><link>b</link><description>d</description><item><title>x</title><link>y</link><content:encoded><![CDATA[<p>Hello</p>]]></content:encoded></item></channel></rss>`,
+		body:   `<?xml version="1.0" encoding="UTF-8"?><rss xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel><title>a</title><link>b</link><description>d</description><image><url>https://example.com/logo.png</url><title>Logo</title></image><item><title>x</title><link>y</link><content:encoded><![CDATA[<p>Hello</p>]]></content:encoded></item></channel></rss>`,
 	})
 	defer restore()
 
@@ -48,10 +48,16 @@ func TestConvertHandlerOK(t *testing.T) {
 		if _, exists := feedMap["items"]; exists {
 			t.Fatalf("feed should not contain items")
 		}
+		if feedMap["image"] != "https://example.com/logo.png" {
+			t.Fatalf("unexpected feed image: %v", feedMap["image"])
+		}
 	}
 
 	if strings.Contains(rr.Body.String(), `\u003c`) {
 		t.Fatalf("html should not be escaped: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `"extensions"`) {
+		t.Fatalf("extensions should not be exposed: %s", rr.Body.String())
 	}
 
 	if ct := rr.Header().Get("Content-Type"); ct != "application/json; charset=utf-8" {

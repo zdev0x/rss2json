@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mmcdole/gofeed"
+	ext "github.com/mmcdole/gofeed/extensions"
 	"github.com/zdev0x/rss2json/internal/model"
 )
 
@@ -114,6 +116,53 @@ func TestConvertAtomSuccess(t *testing.T) {
 	}
 }
 
+func TestStripExtensions(t *testing.T) {
+	feed := &gofeed.Feed{
+		Extensions: ext.Extensions{
+			"atom": {
+				"link": []ext.Extension{{Name: "link"}},
+			},
+		},
+		Items: []*gofeed.Item{
+			{
+				Extensions: ext.Extensions{
+					"media": {
+						"thumbnail": []ext.Extension{{Name: "thumbnail"}},
+					},
+				},
+			},
+		},
+	}
+
+	stripExtensions(feed)
+
+	if feed.Extensions != nil {
+		t.Fatalf("expected feed extensions cleared")
+	}
+	if feed.Items[0].Extensions != nil {
+		t.Fatalf("expected item extensions cleared")
+	}
+}
+
+func TestConvertThumbnail(t *testing.T) {
+	restore := WithHTTPClient(fakeDoer{body: sampleThumbnailRSS, status: http.StatusOK})
+	defer restore()
+
+	resp, err := Convert(context.Background(), "https://example.com/rss")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(resp.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Items))
+	}
+	if resp.Items[0].Thumbnail != "https://example.com/thumb.jpg" {
+		t.Fatalf("unexpected thumbnail: %s", resp.Items[0].Thumbnail)
+	}
+	if resp.Items[1].Thumbnail != "" {
+		t.Fatalf("expected empty thumbnail, got %s", resp.Items[1].Thumbnail)
+	}
+}
+
 func TestNewHTTPClientFromEnvHTTPProxy(t *testing.T) {
 	t.Setenv("RSS_PROXY", "http://127.0.0.1:8888")
 	c := newHTTPClientFromEnv()
@@ -198,6 +247,22 @@ const sampleRSS = `<?xml version="1.0" encoding="UTF-8"?>
       <content:encoded><![CDATA[<p>Hello World</p>]]></content:encoded>
       <pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate>
       <guid>abc123</guid>
+    </item>
+  </channel>
+</rss>`
+
+const sampleThumbnailRSS = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Thumb Feed</title>
+    <item>
+      <title>Item A</title>
+      <link>https://example.com/a</link>
+      <thumbnail>https://example.com/thumb.jpg</thumbnail>
+    </item>
+    <item>
+      <title>Item B</title>
+      <link>https://example.com/b</link>
     </item>
   </channel>
 </rss>`

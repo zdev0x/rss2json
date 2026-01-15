@@ -66,9 +66,7 @@ docker compose down
     "link": "https://www.theguardian.com/international",
     "author": "",
     "description": "Latest international news, sport and comment from the Guardian",
-    "image": {
-      "url": "https://assets.guim.co.uk/images/guardian-logo-rss.c45beb1bafa34b347ac333af2e6fe23f.png"
-    }
+    "image": "https://assets.guim.co.uk/images/guardian-logo-rss.c45beb1bafa34b347ac333af2e6fe23f.png"
   },
   "items": [
     {

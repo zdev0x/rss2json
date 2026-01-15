@@ -22,6 +22,14 @@ func main() {
 	}
 }
 
+const (
+	colorReset  = "\033[0m"
+	colorCyan   = "\033[36m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorGray   = "\033[90m"
+)
+
 // resolveListenAddr 支持通过环境变量配置监听地址，便于容器暴露端口。
 func resolveListenAddr() string {
 	if addr := strings.TrimSpace(os.Getenv("LISTEN_ADDR")); addr != "" {
@@ -62,7 +70,15 @@ func printBanner(addr string, opts server.Options) {
 		"  |_| \\_\\_|   |____/|_____|\\___/ \\___(_)_| \\_|",
 	}
 
-	log.Printf("\n%s\n%s\n  Listen: %s\n  API:    %s/api/v1/rss2json?url=<rss_url>\n  Log:    %s (REQUEST_LOG)\n  Auth:   %s (API_KEY)\n%s", border, strings.Join(logo, "\n"), addr, httpBase, logStatus, authStatus, border)
+	log.Printf("\n%s%s%s\n%s%s%s\n  %sListen:%s %s\n  %sAPI:%s    %s/api/v1/rss2json?url=<rss_url>\n  %sLog:%s    %s (REQUEST_LOG)\n  %sAuth:%s   %s (API_KEY)\n%s%s%s",
+		colorCyan, border, colorReset,
+		colorGreen, strings.Join(logo, "\n"), colorReset,
+		colorYellow, colorReset, addr,
+		colorYellow, colorReset, httpBase,
+		colorGray, colorReset, logStatus,
+		colorGray, colorReset, authStatus,
+		colorCyan, border, colorReset,
+	)
 }
 
 // shouldLogRequest 通过环境变量控制请求日志开关，默认关闭。
